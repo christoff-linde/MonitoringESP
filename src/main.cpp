@@ -1,39 +1,37 @@
 #include <Arduino.h>
+#include <ArduinoJson.h>
+#include <DHT.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
 #include <string.h>
 
-const char* ssid = "CL001";
-const char* password = "Christo)(*";
+const char* _ssid = "CL001";
+const char* _password = "Christo)(*";
+// const char* _ssid = "Jagter";
+// const char* _password = "Altus1912";
 
-String serverName = "http://192.168.0.108:5005/api/DataEntries";
+// Time between POST requests
+static unsigned int delayTime = 30000; // 30 000 = 30 sec
 
-static unsigned int delayTime = 30000;
+#define DHTTYPE DHT22
+uint8_t DHTPIN = D6;
 
-int sendData() {
-  String baseURL = "http://192.168.0.108";
-  String port = ":5005";
-  String endPoint = "/api/DataEntries";
+DHT dht(DHTPIN, DHTTYPE);
 
-  String URL = "http://192.168.0.108:5005/api/DataEntries";
+int sendData(StaticJsonDocument<64> data) {
+  String URL = "http://192.168.0.108:5000/api/DataEntries";
+  // String URL = "http://10.0.0.100:5000/api/DataEntries";
 
   HTTPClient http;
 
   http.begin(URL);
   http.addHeader("Content-Type", "application/json");
 
-  double temperature = random(22, 35);
+  String serializedJson;
+  serializeJson(data, serializedJson);
 
-  String body = "{\"TemperatureC\":";
-  body.concat((String(temperature)));
-  body.concat("}");
-
-  Serial.println("");
-  Serial.print("body: ");
-  Serial.println(body);
-
-  int responseCode = http.POST(body);
+  int responseCode = http.POST(serializedJson);
 
   http.end();
 
@@ -43,11 +41,13 @@ int sendData() {
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
+  pinMode(DHTPIN, INPUT);
+  dht.begin();
 
-  WiFi.begin(ssid, password);
+  WiFi.begin(_ssid, _password);
   Serial.println("");
   Serial.print("Connecting to ");
-  Serial.println(ssid);
+  Serial.println(_ssid);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -56,7 +56,6 @@ void setup() {
   Serial.println("");
   Serial.print("Connected to WiFi network with IP Address: ");
   Serial.println(WiFi.localIP());
-
 }
 
 void loop() {
@@ -65,26 +64,14 @@ void loop() {
 
   if (millis() - last_time > delayTime) {
     if (WiFi.status() == WL_CONNECTED) {
-      // HTTPClient http;
+      StaticJsonDocument<64> doc;
 
-      // http.begin(serverName.c_str());
+      doc["humidity"] = dht.readHumidity();
+      doc["temperatureC"] = dht.readTemperature();
 
-      // int httpResponseCode = http.GET();
+      serializeJsonPretty(doc, Serial);
 
-      // if (httpResponseCode > 0) {
-      //   Serial.print("HTTP Response code: ");
-      //   Serial.println(httpResponseCode);
-
-      //   String payload = http.getString();
-      //   Serial.println(payload);
-      // }
-      // else {
-      //   Serial.print("Error code: ");
-      //   Serial.println(httpResponseCode);
-      // }
-
-      // http.end();
-      int responseCode = sendData();
+      int responseCode = sendData(doc);
 
       if (responseCode > 0) {
         Serial.print("HTTP Response code: ");
