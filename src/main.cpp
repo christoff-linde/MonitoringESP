@@ -12,7 +12,7 @@ const char* _password = "Christo)(*";
 // const char* _password = "Altus1912";
 
 // Time between POST requests
-static unsigned int delayTime = 30000; // 30 000 = 30 sec
+static unsigned int delayTime = 3600000; // 30 000 = 30 sec
 
 #define DHTTYPE DHT22
 uint8_t DHTPIN = D6;
