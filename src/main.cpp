@@ -1,6 +1,19 @@
+/**
+ * @file main.cpp
+ * @author Christoff Linde
+ * @brief The main program containing all functions
+ * @version 0.2
+ * @date 2021-02-17
+ *
+ * @copyright Copyright (c) 2021
+ *
+ */
+
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
+#include <FS.h>
+#include <LittleFS.h>
 #include <TimeLib.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
@@ -8,18 +21,10 @@
 #include <WiFiUdp.h>
 #include <string.h>
 
-// NTP Servers:
+ // NTP Servers:
 static const char ntpServerName[] = "us.pool.ntp.org";
-//static const char ntpServerName[] = "time.nist.gov";
-//static const char ntpServerName[] = "time-a.timefreq.bldrdoc.gov";
-//static const char ntpServerName[] = "time-b.timefreq.bldrdoc.gov";
-//static const char ntpServerName[] = "time-c.timefreq.bldrdoc.gov";
 
 const int timeZone = 2;     // Central European Time
-//const int timeZone = -5;  // Eastern Standard Time (USA)
-//const int timeZone = -4;  // Eastern Daylight Time (USA)
-//const int timeZone = -8;  // Pacific Standard Time (USA)
-//const int timeZone = -7;  // Pacific Daylight Time (USA)
 
 void initWifi();
 void initDHT();
@@ -46,14 +51,156 @@ void digitalClockDisplay();
 void printDigits(int digits);
 void sendNTPpacket(IPAddress& address);
 
+void initData();
+void listDir(const char* dirname);
+void readFile(const char* path);
+void writeFile(const char* path);
+void appendFile(const char* path);
+
+/**
+ * @brief initialise folder structure if not present
+ * 
+ */
+void initData()
+{
+  if (!LittleFS.begin())
+  {
+    Serial.println("LittleFS mount failed");
+    return;
+  }
+
+  Serial.println("initializing data");
+  listDir("/");
+  Serial.println("");
+  listDir("/data");
+  Serial.println("");
+}
+
+/**
+ * @brief list contents of directory
+ * 
+ * @param dirname directory name
+ */
+void listDir(const char* dirname)
+{
+  Serial.printf("Listing directory: %s\n", dirname);
+
+  Dir root = LittleFS.openDir(dirname);
+
+  while (root.next())
+  {
+    File file = root.openFile("r");
+
+    Serial.print("\tFILE:\t");
+    Serial.print(root.fileName());
+    Serial.print("\tSIZE:\t");
+    Serial.print(file.size());
+
+    time_t cr = file.getCreationTime();
+    time_t lw = file.getLastWrite();
+
+    file.close();
+  }
+}
+
+/**
+ * @brief Read file and print contents to Serial
+ * 
+ * @param path path to the file
+ */
+void readFile(const char* path)
+{
+  Serial.printf("Reading file: %s\n", path);
+
+  File file = LittleFS.open(path, "r");
+  if (!file)
+  {
+    Serial.println("Failed to open file for reading");
+    return;
+  }
+
+  Serial.print("Read from file: ");
+  while (file.available())
+  {
+    Serial.write(file.read());
+  }
+
+  file.close();
+}
+
+/**
+ * @brief Write data to a file. If the file already exists, it wil be overwritten
+ * 
+ * @param path path to the file
+ * @param message message to be added to file
+ */
+void writeFile(const char* path, const char* message)
+{
+  Serial.printf("Writing file: %s\n", path);
+
+  File file = LittleFS.open(path, "w");
+  if (!file)
+  {
+    Serial.println("Failed to open file for writing");
+    return;
+  }
+
+  if (file.print(message))
+  {
+    Serial.println("File written");
+  }
+  else
+  {
+    Serial.println("Write failed");
+  }
+
+  delay(2000);
+  file.close();
+}
+
+/**
+ * @brief Append to an existing file
+ * 
+ * @param path path to the file
+ * @param message nessage to be appended
+ */
+void appendFile(const char* path, const char* message) {
+  Serial.printf("Appending to file: %s\n", path);
+
+  File file = LittleFS.open(path, "a");
+  if (!file) {
+    Serial.println("Failed to open file for appending");
+    return;
+  }
+  if (file.print(message)) {
+    Serial.println("Message appended");
+  }
+  else {
+    Serial.println("Append failed");
+  }
+  file.close();
+}
+
+/**
+ * @brief Initial setup code that will only be executed once (on startup)
+ * 
+ */
 void setup()
 {
   // put your setup code here, to run once:
   Serial.begin(115200);
+
+  while (!Serial) {}
+
+  initData();
   initWifi();
-  initDHT();
+  // initDHT();
 }
 
+/**
+ * @brief Main code that will be be executed repeatedly
+ * 
+ */
 void loop()
 {
   // put your main code here, to run repeatedly:
@@ -91,6 +238,12 @@ void loop()
   }
 }
 
+/**
+ * @brief Method to send JSON data to API Endpoint
+ *
+ * @param data serialized JSON data
+ * @return int - HTTP code
+ */
 int sendData(StaticJsonDocument<64> data)
 {
   String URL = "http://192.168.0.108:5000/api/DataEntries";
@@ -111,6 +264,10 @@ int sendData(StaticJsonDocument<64> data)
   return responseCode;
 }
 
+/**
+ * @brief setup WiFi connection
+ *
+ */
 void initWifi()
 {
   WiFi.begin(_ssid, _password);
@@ -135,6 +292,10 @@ void initWifi()
   setSyncInterval(300);
 }
 
+/**
+ * @brief setup DHT settings for temperature sensor
+ *
+ */
 void initDHT()
 {
   pinMode(DHTPIN, INPUT);
@@ -170,6 +331,11 @@ void printDigits(int digits)
 const int NTP_PACKET_SIZE = 48; // NTP time is in the first 48 bytes of message
 byte packetBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming & outgoing packets
 
+/**
+ * @brief Get the Ntp Time object
+ *
+ * @return time_t
+ */
 time_t getNtpTime()
 {
   IPAddress ntpServerIP; // NTP server's ip address
@@ -201,7 +367,11 @@ time_t getNtpTime()
   return 0; // return 0 if unable to get the time
 }
 
-// send an NTP request to the time server at the given address
+/**
+ * @brief send an NTP request to the time server at the given address
+ *
+ * @param address - destination IPAddress
+ */
 void sendNTPpacket(IPAddress& address)
 {
   // set all bytes in the buffer to 0
