@@ -17,8 +17,13 @@
 #include <TimeLib.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
+#include <SPI.h>
 #include <WiFiClient.h>
 #include <WiFiUdp.h>
+
+#include <iostream>
+#include <fstream>
+#include <iomanip>
 #include <string.h>
 
  // NTP Servers:
@@ -28,6 +33,7 @@ const int timeZone = 2;     // Central European Time
 
 void initWifi();
 void initDHT();
+int sendData();
 int sendData(StaticJsonDocument<64> data);
 
 const char* _ssid = "CL001";
@@ -36,15 +42,20 @@ const char* _password = "Christo)(*";
 // const char* _password = "Altus1912";
 
 // Time between POST requests
-static unsigned int delayTime = 900000; // 900 000 = 15min
+static unsigned int postDelayTime = 60000;   // 86 400 000 = 24h
+
+// Time between DHT Readings
+static unsigned int dhtDelayTime = 4000;      // 900 000    = 15 min
 
 #define DHTTYPE DHT22
-uint8_t DHTPIN = D6;
+uint8_t DHTPIN = D1;                            // Physical pin on ESP
 
 DHT dht(DHTPIN, DHTTYPE);
 
 WiFiUDP Udp;
 unsigned int localPort = 8888;
+
+DynamicJsonDocument doc(2048);
 
 time_t getNtpTime();
 void digitalClockDisplay();
@@ -56,10 +67,11 @@ void listDir(const char* dirname);
 void readFile(const char* path);
 void writeFile(const char* path);
 void appendFile(const char* path);
+void deleteFile(const char* path);
 
 /**
  * @brief initialise folder structure if not present
- * 
+ *
  */
 void initData()
 {
@@ -70,15 +82,18 @@ void initData()
   }
 
   Serial.println("initializing data");
-  listDir("/");
-  Serial.println("");
   listDir("/data");
-  Serial.println("");
+
+  if (LittleFS.exists("/data/data.txt"))
+    deleteFile("/data/data.txt");
+
+  // if (LittleFS.exists("/data/data.json"))
+  //   deleteFile("/data/data.json");
 }
 
 /**
  * @brief list contents of directory
- * 
+ *
  * @param dirname directory name
  */
 void listDir(const char* dirname)
@@ -94,7 +109,7 @@ void listDir(const char* dirname)
     Serial.print("\tFILE:\t");
     Serial.print(root.fileName());
     Serial.print("\tSIZE:\t");
-    Serial.print(file.size());
+    Serial.println(file.size());
 
     time_t cr = file.getCreationTime();
     time_t lw = file.getLastWrite();
@@ -105,7 +120,7 @@ void listDir(const char* dirname)
 
 /**
  * @brief Read file and print contents to Serial
- * 
+ *
  * @param path path to the file
  */
 void readFile(const char* path)
@@ -130,7 +145,7 @@ void readFile(const char* path)
 
 /**
  * @brief Write data to a file. If the file already exists, it wil be overwritten
- * 
+ *
  * @param path path to the file
  * @param message message to be added to file
  */
@@ -160,7 +175,7 @@ void writeFile(const char* path, const char* message)
 
 /**
  * @brief Append to an existing file
- * 
+ *
  * @param path path to the file
  * @param message nessage to be appended
  */
@@ -182,8 +197,39 @@ void appendFile(const char* path, const char* message) {
 }
 
 /**
+ * @brief Rename existing file
+ *
+ * @param path1 path to existing file name
+ * @param path2 path to new file name
+ */
+void renameFile(const char* path1, const char* path2) {
+  Serial.printf("Renaming file %s to %s\n", path1, path2);
+  if (LittleFS.rename(path1, path2)) {
+    Serial.println("File renamed");
+  }
+  else {
+    Serial.println("Rename failed");
+  }
+}
+
+/**
+ * @brief Delete file at given path
+ *
+ * @param path path to file to be deleted
+ */
+void deleteFile(const char* path) {
+  Serial.printf("Deleting file: %s\n", path);
+  if (LittleFS.remove(path)) {
+    Serial.println("File deleted");
+  }
+  else {
+    Serial.println("Delete failed");
+  }
+}
+
+/**
  * @brief Initial setup code that will only be executed once (on startup)
- * 
+ *
  */
 void setup()
 {
@@ -194,33 +240,69 @@ void setup()
 
   initData();
   initWifi();
-  // initDHT();
+  initDHT();
 }
 
 /**
  * @brief Main code that will be be executed repeatedly
- * 
+ *
  */
 void loop()
 {
   // put your main code here, to run repeatedly:
   static unsigned long last_time = 0;
+  static unsigned long post_last_time = 0;
 
-  if (millis() - last_time > delayTime) {
-    if (WiFi.status() == WL_CONNECTED) {
-      StaticJsonDocument<64> doc;
+  // Read DHT
+  if (millis() - last_time > dhtDelayTime)
+  {
+    if (WiFi.status() == WL_DISCONNECTED)
+    {
+      initWifi();
+    }
 
-      // time_t currentTime = getNtpTime();
+    if (WiFi.status() == WL_CONNECTED)
+    {
 
-      doc["timestamp"] = getNtpTime();
-      doc["humidity"] = dht.readHumidity();
-      doc["temperatureC"] = dht.readTemperature();
+      // read sensor
+      time_t timestamp = getNtpTime();
+      float humidity = dht.readHumidity();
+      float temperature = dht.readTemperature();
 
-      Serial.println("");
-      serializeJsonPretty(doc, Serial);
-      Serial.println("");
+      JsonObject dataReading = doc.createNestedObject();
+      dataReading["timestamp"] = timestamp;
+      dataReading["humidity"] = humidity;
+      dataReading["temperatureC"] = temperature;
 
-      int responseCode = sendData(doc);
+      // serializeJsonPretty(doc, Serial);
+
+      File dataFile = LittleFS.open("/data/data.json", "w");
+      serializeJson(doc, dataFile);
+      dataFile.close();
+
+      // readFile("/data/data.json");
+
+      // File dataFile = LittleFS.open("/data/data.json", "a");
+      // listDir("/data/");
+
+      // serializeJson(dataReading, dataFile);
+      // dataFile.close();
+
+      // readFile("/data/data.json");
+    }
+    last_time = millis();
+  }
+
+  if (millis() - post_last_time > postDelayTime)
+  {
+    if (WiFi.status() == WL_DISCONNECTED)
+    {
+      initWifi();
+    }
+
+    if (WiFi.status() == WL_CONNECTED)
+    {
+      int responseCode = sendData();
 
       if (responseCode > 0) {
         Serial.print("HTTP Response code: ");
@@ -231,18 +313,76 @@ void loop()
         Serial.println(responseCode);
       }
     }
-    else {
-      Serial.println("WiFi Disconnected");
-    }
-    last_time = millis();
+    post_last_time = millis();
   }
+
+  // Send data
+
+  // if (millis() - last_time > postDelayTime) {
+  //   static unsigned int dhtDelayTime = 900000;
+  //   if (WiFi.status() == WL_CONNECTED) {
+  //     StaticJsonDocument<64> doc;
+
+  //     doc["timestamp"] = getNtpTime();
+  //     doc["humidity"] = dht.readHumidity();
+  //     doc["temperatureC"] = dht.readTemperature();
+
+  //     Serial.println("");
+  //     serializeJsonPretty(doc, Serial);
+  //     Serial.println("");
+
+  //     int responseCode = sendData(doc);
+
+  //     if (responseCode > 0) {
+  //       Serial.print("HTTP Response code: ");
+  //       Serial.println(responseCode);
+  //     }
+  //     else {
+  //       Serial.print("HTTP Error: ");
+  //       Serial.println(responseCode);
+  //     }
+  //   }
+  //   else {
+  //     Serial.println("WiFi Disconnected");
+  //   }
+  //   last_time = millis();
+  // }
+}
+
+/**
+ * @brief Method to send JSON data to API Endpoint
+ * 
+ * @return int HTTP response code
+ */
+int sendData()
+{
+  String URL = "http://192.168.0.108:5000/api/DataEntries/list";
+
+  HTTPClient http;
+
+  http.begin(URL);
+  http.addHeader("Content-Type", "application/json");
+
+  File dataFile = LittleFS.open("/data/data.json", "r");
+
+  // DynamicJsonDocument temp(2048);
+  // deserializeJson(temp, dataFile);
+
+  String serializedJson;
+  serializeJson(doc, serializedJson);
+
+  int responseCode = http.POST(serializedJson);
+
+  http.end();
+
+  return responseCode;
 }
 
 /**
  * @brief Method to send JSON data to API Endpoint
  *
  * @param data serialized JSON data
- * @return int - HTTP code
+ * @return int HTTP response code
  */
 int sendData(StaticJsonDocument<64> data)
 {
@@ -298,6 +438,7 @@ void initWifi()
  */
 void initDHT()
 {
+  Serial.printf("initializing DHT sensor");
   pinMode(DHTPIN, INPUT);
   dht.begin();
 }
@@ -341,7 +482,7 @@ time_t getNtpTime()
   IPAddress ntpServerIP; // NTP server's ip address
 
   while (Udp.parsePacket() > 0); // discard any previously received packets
-  Serial.println("Transmit NTP Request");
+  // Serial.println("Transmit NTP Request");
   // get a random server from the pool
   WiFi.hostByName(ntpServerName, ntpServerIP);
   Serial.print(ntpServerName);
@@ -352,7 +493,7 @@ time_t getNtpTime()
   while (millis() - beginWait < 1500) {
     int size = Udp.parsePacket();
     if (size >= NTP_PACKET_SIZE) {
-      Serial.println("Receive NTP Response");
+      // Serial.println("Receive NTP Response");
       Udp.read(packetBuffer, NTP_PACKET_SIZE);  // read packet into the buffer
       unsigned long secsSince1900;
       // convert four bytes starting at location 40 to a long integer
