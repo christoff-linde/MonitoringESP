@@ -2,8 +2,8 @@
  * @file main.cpp
  * @author Christoff Linde
  * @brief The main program containing all functions
- * @version 0.2
- * @date 2021-02-17
+ * @version 0.3
+ * @date 2021-03/02
  *
  * @copyright Copyright (c) 2021
  *
@@ -20,35 +20,167 @@
 #include <WiFiUdp.h>
 
  // Forward declarations
+ /**
+  * @brief Initialise WiFiMulti and start a WiFi Access Point.
+  *
+  * @details This method intialises multiple Access Points. The most suitable one is then connected to.
+  * On successful connection, the IP Address assigned to the device is displayed
+  */
 void startWiFi();
+
+/**
+ * @brief Start listening for UDP messages
+ *
+ * @details This method initialises the WiFiUDP UDP object. On initialization, the UDP listens on port 123
+ * by default. The local port is also printed to Serial console.
+ */
 void startUDP();
+
+/**
+ * @brief Start the LittleFS file system
+ *
+ * @details This method starts the file system for the device. After successfully starting, the contents
+ * of the root directory is listed to Serial console.
+ * 
+ * @see LittleFS
+ * @see listDirectory
+ */
 void startLittleFS();
+
+/**
+ * @brief Start the DHT sensor
+ *
+ * @details This method initialises the DHT object with the default global parameters.
+ */
 void startSensors();
+
+/**
+ * @brief Convert sizes in bytes to KB and MB
+ *
+ * @details This helper method converts the passed in data to a more human readable format i.e. into KB and MB
+ *
+ * @see startLittleFS
+ * 
+ * @param bytes size_t size to be formated
+ * @returns String - the formated string
+ */
 String formatBytes(size_t bytes);
+
+/**
+ * @brief Get the UNIX time
+ *
+ * @details This method checks if the time server has responded. If so,
+ *  \li get the UNIX time
+ *  otherwise
+ *  \li return 0
+ *
+ * @returns unsigned long - UNIX time or 0
+ */
 unsigned long getTime();
+
+/**
+ * @brief Send NTP packet to IPAddress
+ * 
+ * @details This method sends a NTP request to the given IPAddress. 
+ * All bytes in the packetBuffer are set to 0, with the size determined by NTP_PACKET_SIZE.
+ * 
+ * A packet is then sent to the WiFiUDP object to the specified port.
+ * 
+ * @param address IPAddress of the UDP server
+ */
 void sendNTPpacket(IPAddress& address);
+
+/**
+ * @brief List contents of directory
+ * 
+ * @details This method steps recursively through all directories in the specified filepath,
+ * and prints each file by name and size.
+ * 
+ * @param path the relative path to be listed
+ */
 void listDirectory(const char* path);
+
+/**
+ * @brief Read contents of the specified file
+ * 
+ * @details This method reads all contents of the file at the specified filepath. If the file
+ * does not exist,
+ *  \li the file will not be created automatically.
+ * If the file exists,
+ * \li all contents will be printed to the Serial console.
+ * 
+ * @param path the relative filepath to the requested file
+ */
 void readFile(const char* path);
+
+/**
+ * @brief Delete the specified file
+ * 
+ * @details This method deletes the file at the given filepath. If the file does not exist, the
+ * delete will fail and a error message will accordingly be printed to the console.
+ * 
+ * @param path the relative filepath to the requested file
+ */
 void deleteFile(const char* path);
+
+/**
+ * @brief Send data readings to API
+ * 
+ * @details This method initialises a HTTPClient and API endpoint. The data file storing the 
+ * data readings will be opened and processed line by line with @see readStringUntil. This occur 
+ * three times for each line of data. 
+ * 
+ * Read data is stored in a String buffer. For each endline delimitted line of the data file, a JsonObject
+ * is created with the necessary data. The created object is then serialized and appended to a StaticJsonDocument
+ * declared at the start of the loop.
+ * 
+ * After processing all lines of data, the data file is flushed and cleared.
+ * 
+ * An HTTP.POST request is made to the API endpoint with the serialized json data in the request body. The HTTP 
+ * response code is returned
+ * 
+ * @return int - the HTTP response code
+ */
+int sendData();
 
 #define ONE_HOUR 3600000UL
 
+/// DHTTYPE variable specifying the sensor type
 #define DHTTYPE DHT22
+
+/// Physical pin on ESP that maps to GPIO-05
 uint8_t DHTPIN = D1;
 
+/**
+ * @brief Initialise DHT config
+ * 
+ * @details Instantiate a DHT object with the DHTPIN and DHTTYPE parameters
+ * 
+ * @return DHT instantiated DHT object
+ */
 DHT dht(DHTPIN, DHTTYPE);
 
+/// Create an instance of the ESP8266WiFiMulti class, called 'wifiMulti'
 ESP8266WiFiMulti wifiMulti;
 
+/// Create an instance of the WiFiUDP class to send and receive UDP messages
 WiFiUDP UDP;
 
+/// The time.nist.gov NTP server's IP Address
 IPAddress timeServerIP;
 const char* ntpServerName = "time.nist.gov";
 
+/// NTP timestamp is in the first 48 bytes of the message
 const int NTP_PACKET_SIZE = 48;
 
+/// A buffer to hold incoming and outgoing UDP packets
 byte packetBuffer[NTP_PACKET_SIZE];
 
+/**
+ * @brief Run at every startup
+ * 
+ * @details The setup method run at every device startup.
+ */
 void setup()
 {
   Serial.begin(115200);
@@ -69,16 +201,24 @@ void setup()
 
   sendNTPpacket(timeServerIP);
   delay(500);
-
 }
 
+/// Update the NTP time every hour
 const unsigned long intervalNTP = ONE_HOUR;
+/// Store timestamp of previous NTP update
 unsigned long prevNTP = 0;
+/// Timestamp of lastNTP response initialized to current time
 unsigned long lastNTPResponse = millis();
 
-const unsigned long intervalTemp = 60000;
+/// Send POST requests every 1 Hour
+const unsigned long intervalPost = 3600000;
+/// Read sensors every 15 min
+const unsigned long intervalTemp = 900000;
 unsigned long prevReading = 0;
+unsigned long prevSend = 0;
+bool dataSent = false;
 bool dataRequested = false;
+/// Delay to cater for slow 2000ms polling rate of DHT22 sensor
 const unsigned long DS_delay = 2000;
 
 uint32_t timeUNIX = 0;
@@ -135,20 +275,35 @@ void loop()
       Serial.printf("\nAppending data to file: %i\t", actualTime);
       Serial.printf("Humidity: %f\tTemperature: %f\n", humidity, temperature);
 
-      File dataFile = LittleFS.open("/data.ndjson", "a");
-      serializeJson(reading, dataFile);
-      dataFile.close();
+      File dataLog = LittleFS.open("data.txt", "a");
 
-      readFile("/data.ndjson");
-
-      File dataLog = LittleFS.open("/data.txt", "a");
       dataLog.print(actualTime);
       dataLog.print(',');
       dataLog.print(humidity);
       dataLog.print(',');
-      dataLog.print(temperature);
-      dataLog.print(';');
+      dataLog.println(temperature);
+
       dataLog.close();
+    }
+
+    if (currentMillis - prevSend > intervalPost)
+    {
+      dataSent = true;
+      prevSend = currentMillis;
+    }
+    if (currentMillis - prevSend && dataSent)
+    {
+      dataSent = false;
+      Serial.println("Sending data to .NET API");
+      int responseCode = sendData();
+      if (responseCode > 0)
+      {
+        Serial.printf("HTTP Response code: %i\n", responseCode);
+      }
+      else
+      {
+        Serial.printf("HTTP Error: %i\n", responseCode);
+      }
     }
   }
   else
@@ -284,4 +439,49 @@ void deleteFile(const char* path)
   {
     Serial.println("File delete failed");
   }
+}
+
+int sendData()
+{
+  HTTPClient http;
+
+  const char* URL = "http://192.168.0.108:5000/api/DataEntries/list";
+
+  StaticJsonDocument<2048> doc;
+
+  File dataFile;
+  String buf;
+
+  dataFile = LittleFS.open("data.txt", "r");
+  while (dataFile.available())
+  {
+    JsonObject readingObject = doc.createNestedObject();
+
+    buf = dataFile.readStringUntil(',');
+    readingObject["timestamp"] = buf.toInt();
+
+    buf = dataFile.readStringUntil(',');
+    readingObject["humidity"] = buf.toFloat();
+
+    buf = dataFile.readStringUntil('\n');
+    readingObject["temperature"] = buf.toFloat();
+  }
+
+  dataFile.flush();
+
+  dataFile.close();
+
+  // serializeJsonPretty(doc, Serial);
+
+  http.begin(URL);
+  http.addHeader("Content-Type", "application/json");
+
+  String serializedJSON;
+  serializeJson(doc, serializedJSON);
+
+  int responseCode = http.POST(serializedJSON);
+
+  http.end();
+
+  return responseCode;
 }
