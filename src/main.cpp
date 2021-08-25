@@ -1,9 +1,12 @@
 /**
  * @file main.cpp
  * @author Christoff Linde
- * @brief The main program containing all functions
+ * @brief A basic program for monitoring a DHT-22 with an ESP8266
  * @version 0.3
  * @date 2021-03/02
+ *
+ * Some of the code below was inspired by the 
+ * [A Beginner's Guide to the ESP8266](https://tttapa.github.io/ESP8266/Chap01%20-%20ESP8266.html) ebook
  *
  * @copyright Copyright (c) 2021
  *
